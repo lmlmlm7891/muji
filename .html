@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>灵动接宝 - 接住方块小游戏</title>
+    <style>
+        * {
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            background: linear-gradient(145deg, #1a472a 0%, #0e2a1a 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', 'Poppins', 'Courier New', monospace;
+            touch-action: manipulation;
+        }
+
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        canvas {
+            display: block;
+            margin: 0 auto;
+            border-radius: 32px;
+            box-shadow: 0 20px 35px rgba(0, 0, 0, 0.4), inset 0 0 0 2px rgba(255, 255, 255, 0.2);
+            cursor: pointer;
+            background: #0f2b1c;
+            transition: transform 0.1s ease;
+        }
+
+        canvas:active {
+            transform: scale(0.99);
+        }
+
+        .info-panel {
+            margin-top: 20px;
+            display: flex;
+            gap: 30px;
+            background: rgba(0, 0, 0, 0.55);
+            backdrop-filter: blur(8px);
+            padding: 12px 28px;
+            border-radius: 80px;
+            border: 1px solid rgba(255, 215, 120, 0.5);
+            box-shadow: 0 8px 18px rgba(0, 0, 0, 0.3);
+        }
+
+        .score-box, .best-box {
+            text-align: center;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }
+
+        .score-label, .best-label {
+            font-size: 0.85rem;
+            color: #ffecb3;
+            text-transform: uppercase;
+            background: #2c1a0e;
+            padding: 2px 12px;
+            border-radius: 30px;
+            display: inline-block;
+        }
+
+        .score-value, .best-value {
+            font-size: 2.3rem;
+            font-weight: 800;
+            margin-left: 8px;
+            color: #ffd966;
+            text-shadow: 0 2px 5px #00000050;
+            font-family: monospace;
+        }
+
+        button {
+            margin-top: 20px;
+            background: #f4b942;
+            border: none;
+            font-size: 1.2rem;
+            font-weight: bold;
+            font-family: inherit;
+            padding: 8px 28px;
+            border-radius: 60px;
+            color: #2d2b1f;
+            box-shadow: 0 5px 0 #a05e15;
+            cursor: pointer;
+            transition: 0.07s linear;
+            letter-spacing: 1px;
+        }
+
+        button:active {
+            transform: translateY(3px);
+            box-shadow: 0 2px 0 #a05e15;
+        }
+
+        .control-note {
+            margin-top: 12px;
+            font-size: 0.75rem;
+            background: #00000066;
+            padding: 5px 12px;
+            border-radius: 60px;
+            color: #e9e2b3;
+            backdrop-filter: blur(4px);
+        }
+
+        @media (max-width: 600px) {
+            .score-value, .best-value {
+                font-size: 1.6rem;
+            }
+            .info-panel {
+                gap: 20px;
+                padding: 8px 20px;
+            }
+            button {
+                font-size: 1rem;
+                padding: 6px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="game-container">
+    <canvas id="gameCanvas" width="500" height="600"></canvas>
+    <div class="info-panel">
+        <div class="score-box">
+            <span class="score-label">🍎 得分</span>
+            <span class="score-value" id="scoreValue">0</span>
+        </div>
+        <div class="best-box">
+            <span class="best-label">🏆 最高分</span>
+            <span class="best-value" id="bestValue">0</span>
+        </div>
+    </div>
+    <button id="resetButton">✨ 新的一局 ✨</button>
+    <div class="control-note">
+        🖱️ 鼠标移动 或 手指滑动 ➡️ 控制接盘
+    </div>
+</div>
+
+<script>
+    (function(){
+        // ---------- 画布元素 ----------
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // ---------- 游戏配置参数 ----------
+        const W = 500;
+        const H = 600;
+        canvas.width = W;
+        canvas.height = H;
+
+        // 接盘 (玩家)
+        const PADDLE_W = 100;
+        const PADDLE_H = 24;
+        let paddleX = (W - PADDLE_W) / 2;
+        const PADDLE_Y = H - PADDLE_H - 20;   // 距离底部20px
+        const PADDLE_SPEED = 12;              // 每帧最大移动限制 (实际跟随鼠标/触摸)
+
+        // 下落物方块
+        let items = [];
+        const BASE_ITEM_SIZE = 20;
+        const MAX_ITEM_SIZE = 32;
+        const MIN_ITEM_SIZE = 18;
+        let frameCounter = 0;
+        let spawnGap = 28;      // 初始生成间隔帧数 (约0.46秒 60帧)
+        let currentDifficulty = 1;
+        
+        // 得分 & 游戏状态
+        let score = 0;
+        let bestScore = 0;
+        let gameRunning = true;
+        let animationId = null;
+        
+        // 特效数组 (简单捕获闪光)
+        let catchEffects = [];
+        
+        // 加载本地最高分
+        try {
+            const saved = localStorage.getItem('catchMasterBest');
+            if(saved && !isNaN(parseInt(saved))) {
+                bestScore = parseInt(saved);
+                document.getElementById('bestValue').innerText = bestScore;
+            }
+        } catch(e) { /* 安静失败 */ }
+        
+        // UI 元素
+        const scoreSpan = document.getElementById('scoreValue');
+        const bestSpan = document.getElementById('bestValue');
+        const resetBtn = document.getElementById('resetButton');
+        
+        // ---------- 辅助函数 ----------
+        function updateScoreUI() {
+            scoreSpan.innerText = score;
+            if(score > bestScore) {
+                bestScore = score;
+                bestSpan.innerText = bestScore;
+                // 存储本地记录
+                try {
+                    localStorage.setItem('catchMasterBest', bestScore);
+                } catch(e) {}
+            }
+        }
+        
+        // 生成一个新的下落物 (带有随机属性)
+        function spawnItem() {
+            // 尺寸随着得分增加略微变大/变丰富, 但也在区间内
+            let sizeVariation = Math.min(MAX_ITEM_SIZE, BASE_ITEM_SIZE + Math.floor(score / 180));
+            let size = Math.max(MIN_ITEM_SIZE, Math.min(MAX_ITEM_SIZE, sizeVariation));
+            // 随机形状: 0圆形 1方形 2星形(用菱形表现) 简单区分颜色
+            const type = Math.floor(Math.random() * 3); // 0,1,2
+            let color = '';
+            if(type === 0) color = '#FFD966'; // 金币色
+            else if(type === 1) color = '#6CC24A'; // 翠绿宝石
+            else color = '#FF8C69'; // 珊瑚橘
+            
+            // x 位置避开边缘半个尺寸
+            const randX = Math.random() * (W - size * 1.2) + size * 0.6;
+            const speedY = 3 + Math.random() * 3.5 + (score / 380); // 速度随分数微增 最高约7.5
+            const finalSpeed = Math.min(9.2, speedY);
+            
+            items.push({
+                x: randX,
+                y: -size,
+                size: size,
+                type: type,
+                color: color,
+                speedY: finalSpeed,
+                // 小旋转效果备用
+                rotation: 0
+            });
+        }
+        
+        // 重置游戏全部状态
+        function resetGame() {
+            gameRunning = true;
+            score = 0;
+            items = [];
+            catchEffects = [];
+            frameCounter = 0;
+            currentDifficulty = 1;
+            spawnGap = 28;
+            updateScoreUI();
+            // 重置接盘位置
+            paddleX = (W - PADDLE_W) / 2;
+            // 开局立刻生成3个物品让游戏不空旷
+            for(let i = 0; i < 3; i++) {
+                spawnItem();
+            }
+        }
+        
+        // 碰撞检测 (矩形与圆/矩形的近似，采用包围盒方式，足够好玩)
+        function checkCollision(paddleRect, item) {
+            // 物品视为矩形/圆形简单碰撞 (采用矩形碰撞足够，精致一点用圆心+矩形，但方块类游戏矩形舒服)
+            // 为了使星形/圆形也有合理手感，统一使用AABB碰撞，并且给物品稍微柔和边缘
+            const itemLeft = item.x - item.size/2;
+            const itemRight = item.x + item.size/2;
+            const itemTop = item.y - item.size/2;
+            const itemBottom = item.y + item.size/2;
+            
+            if(itemRight > paddleRect.left && itemLeft < paddleRect.right &&
+               itemBottom > paddleRect.top && itemTop < paddleRect.bottom) {
+                return true;
+            }
+            return false;
+        }
+        
+        // 添加捕获特效
+        function addCatchEffect(x, y) {
+            catchEffects.push({
+                x: x,
+                y: y,
+                life: 12  // 帧寿命
+            });
+        }
+        
+        // 更新游戏逻辑 (每帧)
+        function updateGame() {
+            if(!gameRunning) return;
+            
+            // 1) 动态难度: 根据得分调整生成间隔 (越快越难)
+            if(score < 80) {
+                spawnGap = 28 - Math.floor(score / 22);
+                if(spawnGap < 16) spawnGap = 16;
+            } else if(score < 250) {
+                spawnGap = 14 - Math.floor((score-80) / 45);
+                if(spawnGap < 8) spawnGap = 8;
+            } else {
+                spawnGap = 6 + Math.floor(Math.sin(score/70)*1); // 最低6帧间隔 高速模式
+                if(spawnGap < 6) spawnGap = 6;
+                if(spawnGap > 12) spawnGap = 12;
+            }
+            
+            // 控制生成物品计数器
+            frameCounter++;
+            if(frameCounter >= spawnGap) {
+                frameCounter = 0;
+                // 偶尔一次生成两个？ 得分高于150有概率双倍快乐
+                let spawnCount = 1;
+                if(score > 150 && Math.random() < 0.22 + (score/1500)) {
+                    spawnCount = 2;
+                }
+                for(let i=0; i<spawnCount; i++) {
+                    spawnItem();
+                }
+            }
+            
+            // 玩家接盘区域 (实时)
+            const paddleRect = {
+                left: paddleX,
+                right: paddleX + PADDLE_W,
+                top: PADDLE_Y,
+                bottom: PADDLE_Y + PADDLE_H
+            };
+            
+            // 更新所有下落物位置 & 碰撞 & 移除越界
+            for(let i=0; i<items.length; i++) {
+                const item = items[i];
+                item.y += item.speedY;
+                // 旋转动画效果
+                if(item.type === 2) item.rotation = (item.rotation || 0) + 0.08;
+                else item.rotation = (item.rotation || 0) + 0.03;
+                
+                // 碰撞检测 (只有游戏运行才加分)
+                if(checkCollision(paddleRect, item)) {
+                    // 接住了！加分，并移除物品，加特效
+                    score++;
+                    updateScoreUI();
+                    addCatchEffect(item.x, item.y);
+                    items.splice(i,1);
+                    i--;
+                    continue;
+                }
+                
+                // 超出底部则游戏结束 (接盘没接到)
+                if(item.y + item.size/2 > H + 40) {
+                    gameRunning = false;
+                    return;   // 立即停止更新，游戏结束
+                }
+                
+                // 超出顶部不处理，超出左右边界不做惩罚，但会自然下落
+                // 保持物品在视野内美观
+            }
+            
+            // 特效更新 (寿命减少)
+            for(let i=0; i<catchEffects.length; i++) {
+                catchEffects[i].life--;
+                if(catchEffects[i].life <= 0) {
+                    catchEffects.splice(i,1);
+                    i--;
+                }
+            }
+        }
+        
+        // ---------- 华丽绘图模块 ----------
+        function drawPaddle() {
+            // 绘制发光底板
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = "#ffbf66";
+            ctx.fillStyle = '#f7b32b';
+            ctx.beginPath();
+            ctx.roundRect(paddleX, PADDLE_Y, PADDLE_W, PADDLE_H, 14);
+            ctx.fill();
+            // 内层高光
+            ctx.shadowBlur = 4;
+            ctx.fillStyle = '#ffe0a3';
+            ctx.beginPath();
+            ctx.roundRect(paddleX+3, PADDLE_Y+2, PADDLE_W-6, PADDLE_H-4, 10);
+            ctx.fill();
+            // 装饰条纹
+            ctx.fillStyle = '#cf8e2c';
+            ctx.beginPath();
+            ctx.roundRect(paddleX+8, PADDLE_Y+6, PADDLE_W-16, 4, 4);
+            ctx.fill();
+            ctx.fillStyle = '#ffcf7a';
+            ctx.beginPath();
+            ctx.roundRect(paddleX+12, PADDLE_Y+12, PADDLE_W-24, 5, 3);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+        
+        function drawItem(item) {
+            const x = item.x;
+            const y = item.y;
+            const size = item.size;
+            const half = size/2;
+            ctx.save();
+            ctx.shadowBlur = 6;
+            ctx.shadowColor = "rgba(0,0,0,0.3)";
+            ctx.translate(x, y);
+            ctx.rotate(item.rotation || 0);
+            if(item.type === 0) {  // 圆形金币
+                ctx.fillStyle = item.color;
+                ctx.beginPath();
+                ctx.arc(0, 0, half, 0, Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = "#FFE484";
+                ctx.beginPath();
+                ctx.arc(-2, -2, half*0.25, 0, Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = "#D4A017";
+                ctx.beginPath();
+                ctx.arc(1, 1, half*0.2, 0, Math.PI*2);
+                ctx.fill();
+            } 
+            else if(item.type === 1) { // 方形宝石
+                ctx.fillStyle = item.color;
+                ctx.fillRect(-half, -half, size, size);
+                ctx.fillStyle = "#ffffff80";
+                ctx.fillRect(-half+3, -half+3, size-6, 4);
+                ctx.fillStyle = "#e0ffb0";
+                ctx.fillRect(-half+2, -half+8, size-4, 3);
+            }
+            else { // 星形/四角星风格
+                ctx.fillStyle = item.color;
+                ctx.beginPath();
+                const spikes = 4;
+                const outerR = half;
+                const innerR = half*0.45;
+                let rot = Math.PI/4;
+                for (let i = 0; i < spikes*2; i++) {
+                    let rad = rot + i * Math.PI / spikes;
+                    let r = (i%2 === 0) ? outerR : innerR;
+                    let px = Math.cos(rad) * r;
+                    let py = Math.sin(rad) * r;
+                    if(i===0) ctx.moveTo(px, py);
+                    else ctx.lineTo(px, py);
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.fillStyle = "#fff5c4";
+                ctx.beginPath();
+                ctx.arc(0, 0, half*0.35, 0, Math.PI*2);
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+        
+        function drawEffects() {
+            for(let ef of catchEffects) {
+                const alpha = Math.min(1, ef.life / 8);
+                ctx.beginPath();
+                ctx.arc(ef.x, ef.y, 12 * (1 - ef.life/14) + 4, 0, Math.PI*2);
+                ctx.fillStyle = `rgba(255, 220, 100, ${alpha*0.8})`;
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(ef.x-2, ef.y-2, 5 * (1 - ef.life/12), 0, Math.PI*2);
+                ctx.fillStyle = `rgba(255, 255, 200, ${alpha})`;
+                ctx.fill();
+            }
+        }
+        
+        function drawBackground() {
+            // 渐变网格底纹
+            const grad = ctx.createLinearGradient(0, 0, 0, H);
+            grad.addColorStop(0, '#1f5a2e');
+            grad.addColorStop(1, '#0f341c');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, W, H);
+            // 装饰光点
+            ctx.fillStyle = '#aadf8833';
+            for(let i=0;i<80;i++) {
+                if(i%2 === 0) continue;
+                ctx.beginPath();
+                ctx.arc( (i*23)%W, (i*17)%H, 1.5, 0, Math.PI*2);
+                ctx.fill();
+            }
+            // 底部阴影区
+            ctx.fillStyle = '#00000030';
+            ctx.fillRect(0, H-40, W, 40);
+        }
+        
+        // 游戏结束画面
+        function drawGameOver() {
+            ctx.fillStyle = 'rgba(0,0,0,0.75)';
+            ctx.fillRect(0, 0, W, H);
+            ctx.font = 'bold 34px "Segoe UI", system-ui';
+            ctx.fillStyle = '#ffda99';
+            ctx.shadowBlur = 0;
+            ctx.textAlign = 'center';
+            ctx.fillText('💀 GAME OVER 💀', W/2, H/2-50);
+            ctx.font = 'bold 26px monospace';
+            ctx.fillStyle = '#f4bc6e';
+            ctx.fillText(`得分: ${score}`, W/2, H/2+20);
+            ctx.font = '18px monospace';
+            ctx.fillStyle = '#e9ddac';
+            ctx.fillText('点击「新的一局」继续挑战', W/2, H/2+90);
+            ctx.textAlign = 'left';
+        }
+        
+        // 画网格说明（简单动态）
+        function drawScoreGlow() {
+            ctx.font = 'bold 28monospace';
+            ctx.shadowBlur = 0;
+        }
+        
+        // 自定义 roundRect
+        if (!CanvasRenderingContext2D.prototype.roundRect) {
+            CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+                if (w < 2 * r) r = w / 2;
+                if (h < 2 * r) r = h / 2;
+                this.moveTo(x+r, y);
+                this.lineTo(x+w-r, y);
+                this.quadraticCurveTo(x+w, y, x+w, y+r);
+                this.lineTo(x+w, y+h-r);
+                this.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+                this.lineTo(x+r, y+h);
+                this.quadraticCurveTo(x, y+h, x, y+h-r);
+                this.lineTo(x, y+r);
+                this.quadraticCurveTo(x, y, x+r, y);
+                return this;
+            };
+        }
+        
+        function draw() {
+            drawBackground();
+            // 绘制所有物品
+            for(let item of items) {
+                drawItem(item);
+            }
+            drawPaddle();
+            drawEffects();
+            // 额外分数氛围
+            ctx.font = 'bold 20monospace';
+            ctx.fillStyle = '#ffeab3';
+            ctx.shadowBlur = 3;
+            ctx.shadowColor = '#2b482e';
+            ctx.fillText('⚡', 20, 55);
+            if(!gameRunning) {
+                drawGameOver();
+            }
+            // 提示小小光标
+            ctx.font = '12px monospace';
+            ctx.fillStyle = '#bfffa0';
+            ctx.fillText('← 滑动 →', W-85, H-12);
+            ctx.shadowBlur = 0;
+        }
+        
+        // ---------- 鼠标/触摸 控制逻辑 (流畅跟随) ----------
+        function handleMove(clientX) {
+            if(!gameRunning) return; // 游戏结束也能移动但不影响物理? 但重置后重新开始需要位置可移动，但游戏结束可移动重置前也无伤大雅
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            let canvasX = (clientX - rect.left) * scaleX;
+            canvasX = Math.min(Math.max(canvasX, 0), W - PADDLE_W);
+            paddleX = canvasX;
+        }
+        
+        function onMouseMove(e) {
+            e.preventDefault();
+            handleMove(e.clientX);
+        }
+        
+        function onTouchMove(e) {
+            e.preventDefault();
+            if(e.touches.length) {
+                handleMove(e.touches[0].clientX);
+            }
+        }
+        
+        function onTouchStart(e) {
+            e.preventDefault();
+            if(e.touches.length) {
+                handleMove(e.touches[0].clientX);
+            }
+        }
+        
+        // 重置并重开游戏
+        function resetAndRestart() {
+            resetGame();
+            gameRunning = true;
+            // 如果有任何结束画面，立即刷新状态
+        }
+        
+        // 绑定事件 (被动模式下提高性能)
+        function bindEvents() {
+            canvas.addEventListener('mousemove', onMouseMove);
+            canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+            canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+            // 避免鼠标离开canvas后黏滞？不用处理，位置合理
+            window.addEventListener('resize', ()=>{}); // 占位
+        }
+        
+        // 动画循环
+        function gameLoop() {
+            if(gameRunning) {
+                updateGame();
+            }
+            draw();
+            animationId = requestAnimationFrame(gameLoop);
+        }
+        
+        // 初始化全部
+        function init() {
+            bindEvents();
+            resetGame();   // 起始生成物品, 分数归零
+            gameRunning = true;
+            animationId = requestAnimationFrame(gameLoop);
+        }
+        
+        // 重置按钮监听
+        resetBtn.addEventListener('click', () => {
+            // 重置全部变量
+            resetAndRestart();
+        });
+        
+        // 开始游戏
+        init();
+        
+        // 额外确保 canvas 禁用默认拖拽图片行为
+        canvas.ondragstart = (e) => { e.preventDefault(); return false; };
+    })();
+</script>
+</body>
+</html>
